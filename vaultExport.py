@@ -4,7 +4,7 @@ from pathlib import Path
 import requests
 import shutil
 import google.auth.transport.requests as google_requests
-from utils import upload_to_drive, extract_zip_file, get_auth_credentials, is_exist_in_sheet, append_rows_to_sheet, get_existing_message_ids, get_last_export_time, update_last_export_time
+from utils import upload_to_drive, extract_zip_file, get_auth_credentials, is_exist_in_sheet, append_rows_to_sheet, get_existing_message_ids, get_export_start_time
 from helpers import process_mbox_file, get_mbox_files
 
 TEMP_DIR = "./temp"
@@ -102,7 +102,7 @@ def create_export(credentials):
             "accountInfo": {
                 "emails": [workspace_admin_email]
             },
-            "startTime": get_last_export_time()
+            "startTime": get_export_start_time()
         },
         "exportOptions": {
             "voiceOptions": {
@@ -148,9 +148,6 @@ def run():
         # exports_data = get_exports(credentials)
         # for export in exports_data:
         #     download_and_upload(export, credentials)
-
-        update_last_export_time((datetime.datetime.now() - datetime.timedelta(minutes=30)).isoformat() + "Z")
-
 
     except Exception as e:
         print(f"Error in run: {e}")
