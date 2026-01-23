@@ -1,0 +1,190 @@
+import os
+import json
+import shutil
+import datetime
+import zipfile
+from pathlib import Path
+from googleapiclient.http import MediaFileUpload
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+
+
+
+TEMP_DIR = "./temp"
+EXTRACT_DIR = "./temp/extracted"
+LAST_EXPORT_FILE = "last_export_time.txt"
+
+
+def get_auth_credentials():
+    service_account_json = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+    if not service_account_json:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON environment variable not set")
+
+    key = json.loads(service_account_json)
+
+    credentials = service_account.Credentials.from_service_account_info(
+        key,
+        scopes=[
+            "https://www.googleapis.com/auth/ediscovery",
+            "https://www.googleapis.com/auth/devstorage.read_only",
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/spreadsheets",
+        ]
+    )
+    return credentials
+
+
+
+def upload_to_drive(credentials, file_path, drive_file_name):
+    drive_service = build('drive', 'v3', credentials=credentials)
+
+    drive_folder_id = os.environ.get('DRIVE_FOLDER_ID')
+    if not drive_folder_id:
+        raise ValueError("DRIVE_FOLDER_ID environment variable not set")
+
+    print(f"Starting upload for {drive_file_name}")
+
+    file_metadata = {
+        'name': drive_file_name,
+        'parents': [drive_folder_id]
+    }
+
+    media = MediaFileUpload(file_path, mimetype='audio/wav', resumable=True)
+
+    file = drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields='id',
+        supportsAllDrives=True
+    ).execute()
+
+    print(f"Uploaded {drive_file_name}")
+    return file
+
+
+def get_existing_message_ids(credentials):
+    sheets_service = build('sheets', 'v4', credentials=credentials)
+    sheet = sheets_service.spreadsheets()
+    sheet_id = os.environ.get('GOOGLE_SPREADSHEET_ID')
+    sheet_tab_name = os.environ.get('GOOGLE_SHEET_TAB_NAME', '')
+
+    if not sheet_id or not sheet_tab_name:
+        raise ValueError(f"GOOGLE_SPREADSHEET_ID or GOOGLE_SHEET_TAB_NAME environment variable not set. Sheet ID: '{sheet_id}', Tab Name: '{sheet_tab_name}'")
+
+    sheet_id = sheet_id.strip() if sheet_id else None
+    sheet_tab_name = sheet_tab_name.strip() if sheet_tab_name else None
+
+
+    result = sheet.values().get(
+        spreadsheetId=sheet_id,
+        range=f'{sheet_tab_name}!A:A'
+    ).execute()
+    
+    
+    message_ids = []
+    for row in result.get('values', []):
+        message_ids.append(row[0])
+    return message_ids
+
+
+def is_exist_in_sheet(message_ids, id):
+    return id in message_ids
+
+
+def append_rows_to_sheet(credentials, sheet_data):
+    sheets_service = build('sheets', 'v4', credentials=credentials)
+    sheet = sheets_service.spreadsheets()
+    sheet_id = os.environ.get('GOOGLE_SPREADSHEET_ID')
+    sheet_tab_name = os.environ.get('GOOGLE_SHEET_TAB_NAME', '')
+
+    if not sheet_id or not sheet_tab_name:
+        raise ValueError(f"GOOGLE_SPREADSHEET_ID or GOOGLE_SHEET_TAB_NAME environment variable not set. Sheet ID: '{sheet_id}', Tab Name: '{sheet_tab_name}'")
+
+    sheet_id = sheet_id.strip() if sheet_id else None
+    sheet_tab_name = sheet_tab_name.strip() if sheet_tab_name else None
+
+    cleaned_sheet_data = []
+    for i, value in enumerate(sheet_data):
+        if value is None:
+            cleaned_sheet_data.append('')
+        else:
+            str_value = str(value).strip()
+            str_value = str_value.replace('\n', ' ').replace('\r', ' ')
+            cleaned_sheet_data.append(str_value)
+
+    print(f"Debug - Sheet data to append: {cleaned_sheet_data}")
+
+    body = {
+        'values': [cleaned_sheet_data]
+    }
+
+    result = sheet.values().append(
+        spreadsheetId=sheet_id,
+        range=f'{sheet_tab_name}!A1',
+        valueInputOption='RAW',
+        insertDataOption='INSERT_ROWS',
+        body=body
+    ).execute()
+
+    print(f"Added row to sheet: {cleaned_sheet_data}")
+    return result
+
+
+def extract_zip_file(zip_path):
+    try:
+        print(f"Starting ZIP extraction for: {zip_path}")
+        temp_extract_dir = Path(EXTRACT_DIR) / "temp_extract"
+        temp_extract_dir.mkdir(parents=True, exist_ok=True)
+        
+
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_entries = zip_ref.namelist()
+            print(f"ZIP contains {len(zip_entries)} entries:")
+
+            for index, entry in enumerate(zip_entries, 1):
+                info = zip_ref.getinfo(entry)
+                print(f"  {index}. {entry} ({info.file_size} bytes)")
+
+            zip_ref.extractall(temp_extract_dir)
+
+        print(f"ZIP extracted successfully to temporary directory: {temp_extract_dir}")
+
+        for extracted_file in temp_extract_dir.rglob("*.zip"):
+            if extracted_file.name.endswith('.mbox.zip'):
+                mbox_zip_path = str(extracted_file)
+                print(f"Found .mbox.zip file: {extracted_file.name}")
+                with zipfile.ZipFile(mbox_zip_path, 'r') as mbox_zip_ref:
+                    mbox_zip_ref.extractall(EXTRACT_DIR)
+
+        shutil.rmtree(temp_extract_dir)
+        print(f"Cleaned up temporary directory: {temp_extract_dir}")
+
+    except Exception as extract_error:
+        print(f"ZIP extraction failed: {extract_error}")
+
+        if os.path.exists(EXTRACT_DIR):
+            try:
+                extracted_files = list(Path(EXTRACT_DIR).iterdir())
+                file_names = [f.name for f in extracted_files]
+                print(f"Files currently in extract directory: {file_names}")
+            except Exception as dir_error:
+                print(f"Could not read extract directory: {dir_error}")
+        else:
+            print("Extract directory does not exist")
+
+        print("Downloaded file is not a valid ZIP file!")
+
+
+def get_last_export_time():
+    if os.path.exists(LAST_EXPORT_FILE):
+        with open(LAST_EXPORT_FILE, 'r') as f:
+            timestamp = f.read().strip()
+            if timestamp:
+                return timestamp
+    # Default to 30 days ago if no last export time exists
+    return (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat() + "Z"
+
+
+def update_last_export_time(timestamp):
+    with open(LAST_EXPORT_FILE, 'w') as f:
+        f.write(timestamp)
