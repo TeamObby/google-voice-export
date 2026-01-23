@@ -12,7 +12,6 @@ from google.oauth2 import service_account
 
 TEMP_DIR = "./temp"
 EXTRACT_DIR = "./temp/extracted"
-LAST_EXPORT_FILE = "last_export_time.txt"
 
 
 def get_auth_credentials():
