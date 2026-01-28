@@ -142,12 +142,12 @@ def run():
         request = google_requests.Request()
         credentials.refresh(request)
 
-        # export_data = create_export(credentials)
-        # download_and_upload(export_data, credentials)
+        export_data = create_export(credentials)
+        download_and_upload(export_data, credentials)
         
-        exports_data = get_exports(credentials)
-        for export in exports_data:
-            download_and_upload(export, credentials)
+        # exports_data = get_exports(credentials)
+        # for export in exports_data:
+        #     download_and_upload(export, credentials)
 
     except Exception as e:
         print(f"Error in run: {e}")
